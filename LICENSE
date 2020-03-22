@@ -1,6 +1,8 @@
 The MIT License (MIT)
 
-Copyright (c) 2016 Protocol Labs
+Copyright for the modified portions of this fork are held by [DAOT Labs, 2020].
+All other copyright for this fork are held by [Protocol Labs, 2016] as
+part of the original go-libp2p-kbucket project.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
