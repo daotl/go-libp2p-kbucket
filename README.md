@@ -1,21 +1,26 @@
 # go-libp2p-kbucket
 
-[![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](https://protocol.ai)
-[![](https://img.shields.io/badge/project-libp2p-yellow.svg?style=flat-square)](https://libp2p.io/)
-[![](https://img.shields.io/badge/freenode-%23libp2p-yellow.svg?style=flat-square)](http://webchat.freenode.net/?channels=%23libp2p)
-[![Discourse posts](https://img.shields.io/discourse/https/discuss.libp2p.io/posts.svg)](https://discuss.libp2p.io)
+Fork of [libp2p/go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) used by BDWare projects.
 
-> A kbucket implementation for use as a routing table in go-libp2p-kad-dht
+[![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](https://protocol.ai)
+[![](https://img.shields.io/badge/project-BDWare-red.svg?style=flat-square)](http://bdware.org/)
+[![go.dev reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white&style=flat-square)](https://pkg.go.dev/github.com/bdware/go-libp2p-kbucket)
+[![Build Status](https://travis-ci.com/BDWare/go-libp2p-kbucket.svg?branch=master)](https://travis-ci.com/BDWare/go-libp2p-kbucket)
+
+> A kbucket implementation for use as a routing table in go-libp2p-kad-dht 
 
 ## Documenation
 
-See https://godoc.org/github.com/libp2p/go-libp2p-kbucket.
+To use this fork, add the following line to your `go.mod`:
+```
+replace github.com/libp2p/go-libp2p-kbucket => bdware.org/libp2p/go-libp2p-kbucket {{KBUCKET_VERSION}}
+```
+
+See [API documentation](https://pkg.go.dev/github.com/bdware/go-libp2p-kbucket).
 
 ## Contribute
 
-Feel free to join in. All welcome. Open an [issue](https://github.com/libp2p/go-libp2p-kbucket/issues)!
-
-This repository falls under the libp2p [Code of Conduct](https://github.com/libp2p/community/blob/master/code-of-conduct.md).
+Feel free to join in. All welcome. Open an [issue](https://github.com/BDWare/go-libp2p-kbucket/issues)!
 
 ### Want to hack on libp2p?
 
@@ -23,7 +28,13 @@ This repository falls under the libp2p [Code of Conduct](https://github.com/libp
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+Copyright for portions of this fork are held by [Protocol Labs, 2016] as part of the original [go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) project.
+
+All other copyright for this fork are held by [The BDWare Authors, 2020].
+
+All rights reserved.
 
 ---
 
