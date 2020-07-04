@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -53,10 +54,30 @@ type RoutingTable struct {
 	// peer in the bucket to be useful to us, failing which, we will evict
 	// it to make place for a new peer if the bucket is full
 	usefulnessGracePeriod time.Duration
+
+	// Estimated average number of bits improved per step.
+	avgBitsImprovedPerStep float64
+	// Estimated average numbter of round trip required per step.
+	// Examples:
+	// For TCP+TLS1.3, avgRoundTripPerStep = 4
+	// For QUIC, avgRoundTripPerStep = 2
+	avgRoundTripPerStep float64
 }
 
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
-func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration) (*RoutingTable, error) {
+func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration, avgBitsImprovedPerStep, avgRoundTripPerStep float64) (*RoutingTable, error) {
+
+	// Estimate the average number of bits improved per step.
+	// Reference: D. Stutzbach and R. Rejaie, "Improving Lookup Performance Over a Widely-Deployed DHT," Proceedings IEEE INFOCOM 2006.
+	// For the basic Kademlia approach D(1,1,k), m(1,k) approaches log(2,k)+0.3327, the number of bits improved on average is 1+m(1,k)=1.3327+log(2,k)
+	if avgBitsImprovedPerStep == 0 {
+		avgBitsImprovedPerStep = 1.3327 + math.Log2(float64(bucketsize))
+	}
+	if avgRoundTripPerStep == 0 {
+		// Default to making CPL most important by assuming the worst case scenario: For TCP+TLS1.3, avgRoundTripPerStep = 4
+		avgRoundTripPerStep = 4
+	}
+
 	rt := &RoutingTable{
 		buckets:    []*bucket{newBucket()},
 		bucketsize: bucketsize,
@@ -71,6 +92,9 @@ func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerst
 		PeerAdded:   func(peer.ID) {},
 
 		usefulnessGracePeriod: usefulnessGracePeriod,
+
+		avgBitsImprovedPerStep: avgBitsImprovedPerStep,
+		avgRoundTripPerStep:    avgRoundTripPerStep,
 	}
 
 	rt.ctx, rt.ctxCancel = context.WithCancel(context.Background())
@@ -382,11 +406,9 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	return out
 }
 
-// NearestPeersConsiderLatency returns a list of the 'count' closest peers to the given id by
-// consider both XOR distance and latency to local peer
-// - id   : target peerID
-// - count: the count of nearest peers
-func (rt *RoutingTable) NearestPeersConsiderLatency(id ID, count int) []peer.ID {
+// NearestPeersConsideringLatency returns a list of the 'count' closest peers
+// to the given ID by considering both xor distance and latency
+func (rt *RoutingTable) NearestPeersConsideringLatency(id ID, count int) []peer.ID {
 	// This is the number of bits _we_ share with the key. All peers in this
 	// bucket share cpl bits with us and will therefore share at least cpl+1
 	// bits with the given key. +1 because both the target and all peers in
@@ -401,45 +423,32 @@ func (rt *RoutingTable) NearestPeersConsiderLatency(id ID, count int) []peer.ID 
 		cpl = len(rt.buckets) - 1
 	}
 
-	// compute avgRTT
-	avgRTT := int64(0)
-	rttCount := int64(0)
-	for _, v := range rt.ListPeers() {
-		rtt := rt.metrics.LatencyEWMA(v)
-		if rtt > 0  && rtt.Seconds() < 5 {
-			avgRTT += rtt.Nanoseconds()
-			rttCount++
-		}
-	}
-	if rttCount > 0 {
-		avgRTT = avgRTT / rttCount
-	}
-
-	// init pls
-	pls := peerDistanceLatencySorter{
-		local:      rt.local,
-		target:     id,
-		peers:      make([]peerCplLatency, 0, count+rt.bucketsize),
-		bucketsize: rt.bucketsize,
-		metrics:    rt.metrics,
-		avgRTT:     avgRTT,
+	// init sorter
+	pdls := peerDistanceLatencySorter{
+		peers:                  make([]peerDistanceCplLatency, 0, count+rt.bucketsize),
+		metrics:                rt.metrics,
+		local:                  rt.local,
+		target:                 id,
+		avgBitsImprovedPerStep: rt.avgBitsImprovedPerStep,
+		avgRoundTripPerStep:    rt.avgRoundTripPerStep,
+		avgLatency:             rt.avgLatency(),
 	}
 
 	// Add peers from the target bucket (cpl+1 shared bits).
-	pls.appendPeersFromList(rt.buckets[cpl].list)
+	pdls.appendPeersFromList(rt.buckets[cpl].list)
 
-	// If we're short, add peers from buckets to the right until we have
-	// enough. All buckets to the right share exactly cpl bits (as opposed
-	// to the cpl+1 bits shared by the peers in the cpl bucket).
+	// If we're short, add peers from all buckets to the right. All buckets
+	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
+	// shared by the peers in the cpl bucket).
 	//
-	// Unfortunately, to be completely correct, we can't just take from
-	// buckets until we have enough peers because peers because _all_ of
-	// these peers will be ~2**(256-cpl) from us.
-	//
-	// However, we're going to do that anyways as it's "good enough"
+	// This is, unfortunately, less efficient than we'd like. We will switch
+	// to a trie implementation eventually which will allow us to find the
+	// closest N peers to any target key.
 
-	for i := cpl + 1; i < len(rt.buckets) && pls.Len() < count; i++ {
-		pls.appendPeersFromList(rt.buckets[i].list)
+	if pdls.Len() < count {
+		for i := cpl + 1; i < len(rt.buckets); i++ {
+			pdls.appendPeersFromList(rt.buckets[i].list)
+		}
 	}
 
 	// If we're still short, add in buckets that share _fewer_ bits. We can
@@ -449,20 +458,20 @@ func (rt *RoutingTable) NearestPeersConsiderLatency(id ID, count int) []peer.ID 
 	// * bucket cpl-1: cpl-1 shared bits.
 	// * bucket cpl-2: cpl-2 shared bits.
 	// ...
-	for i := cpl - 1; i >= 0 && pls.Len() < count; i-- {
-		pls.appendPeersFromList(rt.buckets[i].list)
+	for i := cpl - 1; i >= 0 && pdls.Len() < count; i-- {
+		pdls.appendPeersFromList(rt.buckets[i].list)
 	}
 	rt.tabLock.RUnlock()
 
-	// Sort by both xor distance and latency to local peer
-	pls.sort()
+	// Sort by distance to local peer
+	pdls.sort()
 
-	if count < pls.Len() {
-		pls.peers = pls.peers[:count]
+	if count < pdls.Len() {
+		pdls.peers = pdls.peers[:count]
 	}
 
-	out := make([]peer.ID, 0, pls.Len())
-	for _, p := range pls.peers {
+	out := make([]peer.ID, 0, pdls.Len())
+	for _, p := range pdls.peers {
 		out = append(out, p.p)
 	}
 
@@ -529,6 +538,24 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 		if rt.buckets[i].len() > 0 {
 			return rt.buckets[i].maxCommonPrefix(rt.local)
 		}
+	}
+	return 0
+}
+
+// avgLatency compute average latency of peers in nanoseconds.
+func (rt *RoutingTable) avgLatency() int64 {
+	latency := int64(0)
+	count := int64(0)
+	for _, v := range rt.ListPeers() {
+		l := rt.metrics.LatencyEWMA(v)
+		// Filter latency that is too large to prevent bias.
+		if 0 < l && l.Seconds() < 5 {
+			latency += l.Nanoseconds()
+			count++
+		}
+	}
+	if count > 0 {
+		return latency / count
 	}
 	return 0
 }

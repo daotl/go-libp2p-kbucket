@@ -2,7 +2,6 @@ package kbucket
 
 import (
 	"container/list"
-	"math"
 	"sort"
 	"time"
 
@@ -66,25 +65,34 @@ func SortClosestPeers(peers []peer.ID, target ID) []peer.ID {
 	return out
 }
 
-// TCP + TLS1.3 : 4
-// QUIC : 2
-var PriorityFactor = 4.0
-
-// A helper struct to sort peers by xor distance and latency
-type peerCplLatency struct {
-	p       peer.ID
-	latency time.Duration
+// A helper struct to sort peers by their distance to the local node,
+// and the latency between the local node and each peer
+type peerDistanceCplLatency struct {
+	p        peer.ID
+	distance ID
+	// Is the local peer
+	isLocal bool
 	cpl     int
+	latency time.Duration
 }
 
 // peerDistanceLatencySorter implements sort.Interface to sort peers by xor distance and latency
+// Reference: Wang Xiang, "Design and Implementation of Low-latency P2P Network for Graph-Based Distributed Ledger" 2020.
+// 202006 向往 - 面向图式账本的低延迟P2P网络的设计与实现.pdf
 type peerDistanceLatencySorter struct {
-	local      ID
-	target     ID
-	peers      []peerCplLatency
-	bucketsize int
-	metrics    peerstore.Metrics
-	avgRTT     int64 // Nanoseconds
+	peers   []peerDistanceCplLatency
+	metrics peerstore.Metrics
+	local   ID
+	target  ID
+	// Estimated average number of bits improved per step.
+	avgBitsImprovedPerStep float64
+	// Estimated average numbter of round trip required per step.
+	// Examples:
+	// For TCP+TLS1.3, avgRoundTripPerStep = 4
+	// For QUIC, avgRoundTripPerStep = 2
+	avgRoundTripPerStep float64
+	// Average latency of peers in nanoseconds
+	avgLatency int64
 }
 
 func (pdls *peerDistanceLatencySorter) Len() int { return len(pdls.peers) }
@@ -92,34 +100,35 @@ func (pdls *peerDistanceLatencySorter) Swap(a, b int) {
 	pdls.peers[a], pdls.peers[b] = pdls.peers[b], pdls.peers[a]
 }
 func (pdls *peerDistanceLatencySorter) Less(a, b int) bool {
-	if ConvertPeerID(pdls.peers[a].p).equal(pdls.local) {
+	// only a is the local peer, a < b
+	if pdls.peers[a].isLocal && !pdls.peers[b].isLocal {
 		return true
 	}
-	if ConvertPeerID(pdls.peers[b].p).equal(pdls.local) {
+	// b is the local peer, a ≥ b
+	if pdls.peers[b].isLocal {
 		return false
 	}
 
-	// Calculate the number of improvements per step
-	// reference: Stutzbach D, Rejaie R. Improving Lookup Performance Over a Widely-Deployed DHT[C]// 2006.
-	avgBitsImprovedPerStep := 1.3327 + math.Log2(float64(pdls.bucketsize))
-
-	p := float64(0)
-
-	if pdls.avgRTT > 0 {
-		p = (float64(pdls.peers[a].cpl-pdls.peers[b].cpl)/avgBitsImprovedPerStep)*PriorityFactor - float64(pdls.peers[a].latency.Nanoseconds()-pdls.peers[b].latency.Nanoseconds())/float64(pdls.avgRTT)
-	} else {
-		p = float64(pdls.peers[a].cpl-pdls.peers[b].cpl) / avgBitsImprovedPerStep
+	// If avgLatency > 0, compare our priority score
+	if pdls.avgLatency > 0 {
+		deltaCpl := float64(pdls.peers[a].cpl - pdls.peers[b].cpl)
+		deltaLatency := float64(pdls.peers[a].latency.Nanoseconds() - pdls.peers[b].latency.Nanoseconds())
+		priority := deltaCpl*pdls.avgRoundTripPerStep/pdls.avgBitsImprovedPerStep - deltaLatency/float64(pdls.avgLatency)
+		return priority > 0
 	}
 
-	return p > 0
+	// Otherwise, fall back to comparing distances to target
+	return pdls.peers[a].distance.less(pdls.peers[b].distance)
 }
 
 // Append the peer.ID to the sorter's slice. It may no longer be sorted.
 func (pdls *peerDistanceLatencySorter) appendPeer(p peer.ID, pDhtId ID) {
-	pdls.peers = append(pdls.peers, peerCplLatency{
-		p:       p,
-		latency: pdls.metrics.LatencyEWMA(p),
-		cpl:     CommonPrefixLen(pdls.target, pDhtId),
+	pdls.peers = append(pdls.peers, peerDistanceCplLatency{
+		p:        p,
+		distance: xor(pdls.target, pDhtId),
+		isLocal:  pDhtId.equal(pdls.local),
+		cpl:      CommonPrefixLen(pdls.target, pDhtId),
+		latency:  pdls.metrics.LatencyEWMA(p),
 	})
 }
 
@@ -132,4 +141,27 @@ func (pdls *peerDistanceLatencySorter) appendPeersFromList(l *list.List) {
 
 func (pdls *peerDistanceLatencySorter) sort() {
 	sort.Sort(pdls)
+}
+
+// Sort the given peers by their ascending distance from the target by considering both
+// xor distance and latency. A new slice is returned.
+func SortClosestPeersConsideringLatency(peers []peer.ID, metrics peerstore.Metrics, local, target ID, avgBitsImprovedPerStep, avgRoundTripPerStep float64, avgLatency int64) []peer.ID {
+	sorter := peerDistanceLatencySorter{
+		peers:                  make([]peerDistanceCplLatency, 0, len(peers)),
+		metrics:                metrics,
+		local:                  local,
+		target:                 target,
+		avgBitsImprovedPerStep: avgBitsImprovedPerStep,
+		avgRoundTripPerStep:    avgRoundTripPerStep,
+		avgLatency:             avgLatency,
+	}
+	for _, p := range peers {
+		sorter.appendPeer(p, ConvertPeerID(p))
+	}
+	sorter.sort()
+	out := make([]peer.ID, 0, sorter.Len())
+	for _, p := range sorter.peers {
+		out = append(out, p.p)
+	}
+	return out
 }
