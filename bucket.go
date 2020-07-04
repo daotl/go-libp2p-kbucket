@@ -4,23 +4,25 @@ package kbucket
 
 import (
 	"container/list"
+	"time"
+
 	"github.com/libp2p/go-libp2p-core/peer"
-)
-
-// PeerState is the state of the peer as seen by the Routing Table.
-type PeerState int
-
-const (
-	// PeerStateActive indicates that we know the peer is active/alive.
-	PeerStateActive PeerState = iota
-	// PeerStateMissing indicates that we do not know the state of the peer.
-	PeerStateMissing
 )
 
 // PeerInfo holds all related information for a peer in the K-Bucket.
 type PeerInfo struct {
-	Id    peer.ID
-	State PeerState
+	Id peer.ID
+
+	// LastUsefulAt is the time instant at which the peer was last "useful" to us.
+	// Please see the DHT docs for the definition of usefulness.
+	LastUsefulAt time.Time
+
+	// LastSuccessfulOutboundQueryAt is the time instant at which we last got a
+	// successful query response from the peer.
+	LastSuccessfulOutboundQueryAt time.Time
+
+	// Id of the peer in the DHT XOR keyspace
+	dhtId ID
 }
 
 // bucket holds a list of peers.
@@ -41,12 +43,34 @@ func newBucket() *bucket {
 // returns all peers in the bucket
 // it is safe for the caller to modify the returned objects as it is a defensive copy
 func (b *bucket) peers() []PeerInfo {
-	var ps []PeerInfo
+	ps := make([]PeerInfo, 0, b.len())
 	for e := b.list.Front(); e != nil; e = e.Next() {
 		p := e.Value.(*PeerInfo)
 		ps = append(ps, *p)
 	}
 	return ps
+}
+
+// returns the "minimum" peer in the bucket based on the `lessThan` comparator passed to it.
+// It is NOT safe for the comparator to mutate the given `PeerInfo`
+// as we pass in a pointer to it.
+// It is NOT safe to modify the returned value.
+func (b *bucket) min(lessThan func(p1 *PeerInfo, p2 *PeerInfo) bool) *PeerInfo {
+	if b.list.Len() == 0 {
+		return nil
+	}
+
+	minVal := b.list.Front().Value.(*PeerInfo)
+
+	for e := b.list.Front().Next(); e != nil; e = e.Next() {
+		val := e.Value.(*PeerInfo)
+
+		if lessThan(val, minVal) {
+			minVal = val
+		}
+	}
+
+	return minVal
 }
 
 // return the Ids of all the peers in the bucket.
@@ -108,8 +132,8 @@ func (b *bucket) split(cpl int, target ID) *bucket {
 	newbuck.list = out
 	e := b.list.Front()
 	for e != nil {
-		peerID := ConvertPeerID(e.Value.(*PeerInfo).Id)
-		peerCPL := CommonPrefixLen(peerID, target)
+		pDhtId := e.Value.(*PeerInfo).dhtId
+		peerCPL := CommonPrefixLen(pDhtId, target)
 		if peerCPL > cpl {
 			cur := e
 			out.PushBack(e.Value)
@@ -120,4 +144,17 @@ func (b *bucket) split(cpl int, target ID) *bucket {
 		e = e.Next()
 	}
 	return newbuck
+}
+
+// maxCommonPrefix returns the maximum common prefix length between any peer in
+// the bucket with the target ID.
+func (b *bucket) maxCommonPrefix(target ID) uint {
+	maxCpl := uint(0)
+	for e := b.list.Front(); e != nil; e = e.Next() {
+		cpl := uint(CommonPrefixLen(e.Value.(*PeerInfo).dhtId, target))
+		if cpl > maxCpl {
+			maxCpl = cpl
+		}
+	}
+	return maxCpl
 }
