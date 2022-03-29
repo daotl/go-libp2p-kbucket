@@ -481,7 +481,7 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// * bucket cpl-1: cpl-1 shared bits.
 	// * bucket cpl-2: cpl-2 shared bits.
 	// ...
-	for i := cpl - 1; i >= 0 && s.Len() < count; i-- {
+	for i := cpl - 1; i >= 0 && (rt.considerLatency || s.Len() < count); i-- {
 		s.appendPeersFromList(rt.buckets[i].list)
 	}
 
