@@ -445,9 +445,16 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 
 	if rt.considerLatency {
 		s, err = newPeerDistanceAndLatencySorter(
-			make([]peerDistanceCplRTT, 0, (len(rt.buckets)-cpl)*rt.bucketsize), rt.metrics, rt.dialer, rt.local, id,
+			make([]peerPriority, 0, (len(rt.buckets)-cpl)*rt.bucketsize), rt.metrics, rt.dialer, rt.local, id,
 			rt.avgBitsImprovedPerStep, rt.avgRoundTripsPerStepWithNewPeer, rt.AvgPeerRTTMicroSecs(),
 		)
+		if err == nil {
+			// If considerLatency is enabled, we always add all buckets with CPL >= cpl,
+			// because the closest peers can be in any buckets.
+			for _, b := range rt.buckets {
+				s.appendPeersFromList(b.list)
+			}
+		}
 	}
 
 	// If newPeerDistanceAndLatencySorter failed, also fallback to peerDistanceSorter.
@@ -456,33 +463,33 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 			peers:  make([]peerDistance, 0, count+rt.bucketsize),
 			target: id,
 		}
-	}
 
-	// Add peers from the target bucket (cpl+1 shared bits).
-	s.appendPeersFromList(rt.buckets[cpl].list)
+		// Add peers from the target bucket (cpl+1 shared bits).
+		s.appendPeersFromList(rt.buckets[cpl].list)
 
-	// If we're short, add peers from all buckets to the right. All buckets
-	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
-	// shared by the peers in the cpl bucket).
-	//
-	// This is, unfortunately, less efficient than we'd like. We will switch
-	// to a trie implementation eventually which will allow us to find the
-	// closest N peers to any target key.
-	if rt.considerLatency || s.Len() < count {
-		for i := cpl + 1; i < len(rt.buckets); i++ {
+		// If we're short, add peers from all buckets to the right. All buckets
+		// to the right share exactly cpl bits (as opposed to the cpl+1 bits
+		// shared by the peers in the cpl bucket).
+		//
+		// This is, unfortunately, less efficient than we'd like. We will switch
+		// to a trie implementation eventually which will allow us to find the
+		// closest N peers to any target key.
+		if rt.considerLatency || s.Len() < count {
+			for i := cpl + 1; i < len(rt.buckets); i++ {
+				s.appendPeersFromList(rt.buckets[i].list)
+			}
+		}
+
+		// If we're still short, add in buckets that share _fewer_ bits. We can
+		// do this bucket by bucket because each bucket will share 1 fewer bit
+		// than the last.
+		//
+		// * bucket cpl-1: cpl-1 shared bits.
+		// * bucket cpl-2: cpl-2 shared bits.
+		// ...
+		for i := cpl - 1; i >= 0 && s.Len() < count; i-- {
 			s.appendPeersFromList(rt.buckets[i].list)
 		}
-	}
-
-	// If we're still short, add in buckets that share _fewer_ bits. We can
-	// do this bucket by bucket because each bucket will share 1 fewer bit
-	// than the last.
-	//
-	// * bucket cpl-1: cpl-1 shared bits.
-	// * bucket cpl-2: cpl-2 shared bits.
-	// ...
-	for i := cpl - 1; i >= 0 && s.Len() < count; i-- {
-		s.appendPeersFromList(rt.buckets[i].list)
 	}
 
 	rt.tabLock.RUnlock()

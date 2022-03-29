@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"sort"
-	"time"
 
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
@@ -99,13 +98,12 @@ func SortClosestPeers(peers []peer.ID, target ID) []peer.ID {
 /* #DAOT: peerDistanceAndLatencySorter */
 
 // A helper struct to sort peers by their distance (CPL) and latency (measured by RTT) to the local node
-type peerDistanceCplRTT struct {
+type peerPriority struct {
 	p peer.ID
-	// The local peer
-	isLocal  bool
-	distance ID
-	cpl      int
-	rtt      time.Duration
+	// cpl int
+	// Derived from `p` from the formula from p.37, section 3.7.3 of the below paper.
+	// Indicates the relative amount of expected RTTs saved by selecting the peer to query, larger is better.
+	priority float64
 }
 
 // peerDistanceAndLatencySorter implements peerSorter to sort peers by taking into account both the
@@ -113,7 +111,7 @@ type peerDistanceCplRTT struct {
 // For algorithm details, see section 3.7.3 of the paper "Design and Implementation of Low-latency P2P Network for Graph-Based Distributed Ledger" by Wang Xiang.
 // "面向图式账本的低延迟P2P 网络的设计与实现" by 向往
 type peerDistanceAndLatencySorter struct {
-	peers []peerDistanceCplRTT
+	peers []peerPriority
 	// Used to get RTTs of peers to the local peer
 	metrics peerstore.Metrics
 	// Optional: Used to get connectedness of peers to the local peer
@@ -131,7 +129,7 @@ type peerDistanceAndLatencySorter struct {
 }
 
 func newPeerDistanceAndLatencySorter(
-	peers []peerDistanceCplRTT,
+	peers []peerPriority,
 	metrics peerstore.Metrics,
 	dialer network.Dialer,
 	local ID,
@@ -141,7 +139,7 @@ func newPeerDistanceAndLatencySorter(
 	avgPeerRTTMicroSecs int64,
 ) (*peerDistanceAndLatencySorter, error) {
 	if peers == nil {
-		peers = make([]peerDistanceCplRTT, 0)
+		peers = make([]peerPriority, 0)
 	}
 	// peerstore.Metrics must exist for this strategy.
 	if metrics == nil {
@@ -177,40 +175,14 @@ func (pdls *peerDistanceAndLatencySorter) Swap(a, b int) {
 func (pdls *peerDistanceAndLatencySorter) Less(a, b int) bool {
 	peerA, peerB := pdls.peers[a], pdls.peers[b]
 
-	// Local peer has no latency (RTT), so need to be checked first.
-	// If only a is the local peer, a < b
-	// if b is the local peer, a ≥ b
-	if peerA.isLocal && !peerB.isLocal {
-		return true
-	} else if peerB.isLocal {
-		return false
-	}
-
 	// If only the CPL of one of the peers is less then the local peer, prioritize the other peer.
-	if peerA.cpl < pdls.localCpl && peerB.cpl >= pdls.localCpl {
-		return false
-	} else if peerA.cpl >= pdls.localCpl && peerB.cpl < pdls.localCpl {
-		return true
-	}
+	// if peerA.cpl < pdls.localCpl && peerB.cpl >= pdls.localCpl {
+	// 	return false
+	// } else if peerA.cpl >= pdls.localCpl && peerB.cpl < pdls.localCpl {
+	// 	return true
+	// }
 
-	// If any node is already connected to the local peer, only one RTT is needed to query that peer,
-	// so (avgRoundTripsPerStepWithNewPeer - 1) RTTs can be saved
-	n1, n2 := 0.0, 0.0
-	if pdls.dialer != nil {
-		if pdls.dialer.Connectedness(peerA.p) == network.Connected {
-			n1 = math.Max(pdls.avgRoundTripsPerStepWithNewPeer-1, 0)
-		}
-		if pdls.dialer.Connectedness(peerB.p) == network.Connected {
-			n2 = math.Max(pdls.avgRoundTripsPerStepWithNewPeer-1, 0)
-		}
-	}
-
-	deltaCpl := float64(peerA.cpl - peerB.cpl)
-	deltaRTT := float64(peerA.rtt.Microseconds() - peerB.rtt.Microseconds())
-	priority := deltaCpl*pdls.avgRoundTripsPerStepWithNewPeer/pdls.avgBitsImprovedPerStep -
-		deltaRTT/float64(pdls.avgPeerRTTMicroSecs) + (n1 - n2)
-
-	return priority > 0
+	return peerA.priority > peerB.priority
 }
 
 func (pdls *peerDistanceAndLatencySorter) getPeers(count int) []peer.ID {
@@ -225,12 +197,23 @@ func (pdls *peerDistanceAndLatencySorter) getPeers(count int) []peer.ID {
 }
 
 func (pdls *peerDistanceAndLatencySorter) appendPeer(p peer.ID, pDhtId ID) {
-	pdls.peers = append(pdls.peers, peerDistanceCplRTT{
-		p:        p,
-		isLocal:  pDhtId.equal(pdls.local),
-		distance: xor(pdls.target, pDhtId),
-		cpl:      CommonPrefixLen(pdls.target, pDhtId),
-		rtt:      pdls.metrics.LatencyEWMA(p),
+	cpl := CommonPrefixLen(pdls.target, pDhtId)
+	rttMicroSecs := pdls.metrics.LatencyEWMA(p).Microseconds()
+
+	// If the peer is already connected to the local peer, only one RTT is needed to query it,
+	// so (avgRoundTripsPerStepWithNewPeer - 1) RTTs can be saved
+	n := 0.0
+	if pdls.dialer != nil {
+		if pdls.dialer.Connectedness(p) == network.Connected {
+			n = math.Max(pdls.avgRoundTripsPerStepWithNewPeer-1, 0)
+		}
+	}
+
+	pdls.peers = append(pdls.peers, peerPriority{
+		p: p,
+		// cpl: CommonPrefixLen(pdls.target, pDhtId),
+		priority: float64(cpl)*pdls.avgRoundTripsPerStepWithNewPeer/pdls.avgBitsImprovedPerStep -
+			float64(rttMicroSecs)/float64(pdls.avgPeerRTTMicroSecs) + n,
 	})
 }
 
@@ -257,7 +240,7 @@ func SortClosestPeersByDistanceAndLatency(
 	avgPeerRTTMicroSecs int64,
 ) ([]peer.ID, error) {
 	sorter, err := newPeerDistanceAndLatencySorter(
-		make([]peerDistanceCplRTT, 0, len(peers)),
+		make([]peerPriority, 0, len(peers)),
 		metrics,
 		dialer,
 		local,

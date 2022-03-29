@@ -562,8 +562,8 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 		nil, false, 0, 0)
 	require.NoError(t, err)
 
-	peers := make([]peer.ID, 100)
-	for i := 0; i < 100; i++ {
+	peers := make([]peer.ID, 200)
+	for i := 0; i < 200; i++ {
 		peers[i] = test.RandPeerIDFatal(t)
 		rt.TryAddPeer(peers[i], true, false)
 	}
@@ -585,7 +585,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 	}
 
 	// Ok, now let's try finding all of them.
-	found = rt.NearestPeers(ConvertPeerID(peers[2]), 100)
+	found = rt.NearestPeers(ConvertPeerID(peers[2]), 200)
 	if len(found) != rt.Size() {
 		t.Fatalf("asked for %d peers, got %d", rt.Size(), len(found))
 	}
@@ -603,8 +603,8 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 		nil, true, 0, 0)
 	require.NoError(t, err)
 
-	peers = make([]peer.ID, 100)
-	for i := 0; i < 100; i++ {
+	peers = make([]peer.ID, 200)
+	for i := 0; i < 200; i++ {
 		peers[i] = test.RandPeerIDFatal(t)
 		// Record fake latencies for testing considerLatency enabled
 		m.RecordLatency(peers[i], time.Duration(i)*time.Millisecond)
@@ -631,7 +631,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 	}
 
 	// Ok, now let's try finding all of them.
-	found = rt.NearestPeers(ConvertPeerID(peers[2]), 100)
+	found = rt.NearestPeers(ConvertPeerID(peers[2]), 200)
 	if len(found) != rt.Size() {
 		t.Fatalf("asked for %d peers, got %d", rt.Size(), len(found))
 	}
