@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 
@@ -37,6 +38,9 @@ type RoutingTable struct {
 	// latency metrics
 	metrics peerstore.Metrics
 
+	// Used to get connectedness of peers when considerLatency is enabled.
+	dialer network.Dialer
+
 	// Maximum acceptable latency for peers in this cluster
 	maxLatency time.Duration
 
@@ -57,11 +61,42 @@ type RoutingTable struct {
 	usefulnessGracePeriod time.Duration
 
 	df *peerdiversity.Filter
+
+	/* #DAOT */
+
+	// If enabled, RoutingTable will find the closest peers to a given ID by taking into account not only
+	// the xor distance to the target, but also the latency to the local peer (measured in RTT).
+	// This strategy can be tuned with avgBitsImprovedPerStep and avgRoundTripsPerStepWithNewPeer.
+	considerLatency bool
+
+	// Estimated average number of bits improved per lookup step, if not set will use the default value
+	// calculated using bucket size by EstimatedAvgBitsImprovedPerStepFromBucketSize function.
+	avgBitsImprovedPerStep float64
+
+	// The average RTT count needed per lookup step to connect to a new peer and execute the lookup query,
+	// varies among transport protocols, reference values:
+	// For TCP+TLS1.3 : 4
+	// For QUIC : 2
+	//
+	// If not set will default to 4 (TCP+TLS1.3 settings) which will value the xor distance more in sorting.
+	avgRoundTripsPerStepWithNewPeer float64
 }
 
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
-func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration,
-	df *peerdiversity.Filter) (*RoutingTable, error) {
+func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics,
+	dialer network.Dialer, usefulnessGracePeriod time.Duration, df *peerdiversity.Filter,
+	considerLatency bool, avgBitsImprovedPerStep float64, avgRoundTripsPerStepWithNewPeer float64,
+) (*RoutingTable, error) {
+
+	if considerLatency {
+		if avgBitsImprovedPerStep <= 0 {
+			avgBitsImprovedPerStep = EstimatedAvgBitsImprovedPerStepFromBucketSize(bucketsize)
+		}
+		if avgRoundTripsPerStepWithNewPeer <= 0 {
+			avgRoundTripsPerStepWithNewPeer = AvgRoundTripsPerStepWithNewPeer_TCP_TLS
+		}
+	}
+
 	rt := &RoutingTable{
 		buckets:    []*bucket{newBucket()},
 		bucketsize: bucketsize,
@@ -69,6 +104,7 @@ func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerst
 
 		maxLatency: latency,
 		metrics:    m,
+		dialer:     dialer,
 
 		cplRefreshedAt: make(map[uint]time.Time),
 
@@ -78,6 +114,10 @@ func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerst
 		usefulnessGracePeriod: usefulnessGracePeriod,
 
 		df: df,
+
+		considerLatency:                 considerLatency,
+		avgBitsImprovedPerStep:          avgBitsImprovedPerStep,
+		avgRoundTripsPerStepWithNewPeer: avgRoundTripsPerStepWithNewPeer,
 	}
 
 	rt.ctx, rt.ctxCancel = context.WithCancel(context.Background())
@@ -377,7 +417,14 @@ func (rt *RoutingTable) NearestPeer(id ID) peer.ID {
 	return ""
 }
 
-// NearestPeers returns a list of the 'count' closest peers to the given ID
+// NearestPeers returns a list of the 'count' closest peers to the given ID.
+//
+// #DAOT
+// If rt.considerLatency is enabled, this will take into account not only the xor distance to  the target,
+// but also the latency to the local peer (measured in RTT).
+//
+// For algorithm details, see section 3.7.3 of the paper "Design and Implementation of Low-latency P2P Network for Graph-Based Distributed Ledger" by Wang Xiang.
+// "面向图式账本的低延迟P2P 网络的设计与实现" by 向往
 func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// This is the number of bits _we_ share with the key. All peers in this
 	// bucket share cpl bits with us and will therefore share at least cpl+1
@@ -393,13 +440,26 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 		cpl = len(rt.buckets) - 1
 	}
 
-	pds := peerDistanceSorter{
-		peers:  make([]peerDistance, 0, count+rt.bucketsize),
-		target: id,
+	var s peerSorter
+	var err error
+
+	if rt.considerLatency {
+		s, err = newPeerDistanceAndLatencySorter(
+			make([]peerDistanceCplRTT, 0, (len(rt.buckets)-cpl)*rt.bucketsize), rt.metrics, rt.dialer, rt.local, id,
+			rt.avgBitsImprovedPerStep, rt.avgRoundTripsPerStepWithNewPeer, rt.AvgPeerRTTMicroSecs(),
+		)
+	}
+
+	// If newPeerDistanceAndLatencySorter failed, also fallback to peerDistanceSorter.
+	if !rt.considerLatency || err != nil {
+		s = &peerDistanceSorter{
+			peers:  make([]peerDistance, 0, count+rt.bucketsize),
+			target: id,
+		}
 	}
 
 	// Add peers from the target bucket (cpl+1 shared bits).
-	pds.appendPeersFromList(rt.buckets[cpl].list)
+	s.appendPeersFromList(rt.buckets[cpl].list)
 
 	// If we're short, add peers from all buckets to the right. All buckets
 	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
@@ -408,10 +468,9 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// This is, unfortunately, less efficient than we'd like. We will switch
 	// to a trie implementation eventually which will allow us to find the
 	// closest N peers to any target key.
-
-	if pds.Len() < count {
+	if rt.considerLatency || s.Len() < count {
 		for i := cpl + 1; i < len(rt.buckets); i++ {
-			pds.appendPeersFromList(rt.buckets[i].list)
+			s.appendPeersFromList(rt.buckets[i].list)
 		}
 	}
 
@@ -422,24 +481,16 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// * bucket cpl-1: cpl-1 shared bits.
 	// * bucket cpl-2: cpl-2 shared bits.
 	// ...
-	for i := cpl - 1; i >= 0 && pds.Len() < count; i-- {
-		pds.appendPeersFromList(rt.buckets[i].list)
+	for i := cpl - 1; i >= 0 && s.Len() < count; i-- {
+		s.appendPeersFromList(rt.buckets[i].list)
 	}
+
 	rt.tabLock.RUnlock()
 
 	// Sort by distance to local peer
-	pds.sort()
+	s.sort()
 
-	if count < pds.Len() {
-		pds.peers = pds.peers[:count]
-	}
-
-	out := make([]peer.ID, 0, pds.Len())
-	for _, p := range pds.peers {
-		out = append(out, p.p)
-	}
-
-	return out
+	return s.getPeers(count)
 }
 
 // Size returns the total number of peers in the routing table
@@ -511,6 +562,26 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 		if rt.buckets[i].len() > 0 {
 			return rt.buckets[i].maxCommonPrefix(rt.local)
 		}
+	}
+	return 0
+}
+
+// AvgPeerRTTMicroSecs computes average RTT of peers in the RoutingTable to the local peer in microseconds.
+//
+// #DAOT
+func (rt *RoutingTable) AvgPeerRTTMicroSecs() int64 {
+	var avgPeerRTTMicroSecs int64 = 0
+	var cnt int64 = 0
+	for _, p := range rt.ListPeers() {
+		rtt := rt.metrics.LatencyEWMA(p)
+		// Filter out extreme RTTs (> 1000ms) to prevent bias.
+		if rtt > 0 && rtt < 1000*time.Millisecond {
+			avgPeerRTTMicroSecs += rtt.Microseconds()
+			cnt++
+		}
+	}
+	if cnt > 0 {
+		return avgPeerRTTMicroSecs / cnt
 	}
 	return 0
 }
