@@ -12,7 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 
-	"github.com/libp2p/go-libp2p-kbucket/peerdiversity"
+	"github.com/daotl/go-libp2p-kbucket/peerdiversity"
 
 	logging "github.com/ipfs/go-log"
 )

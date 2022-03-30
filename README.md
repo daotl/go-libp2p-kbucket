@@ -10,11 +10,6 @@ Fork of [libp2p/go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) 
 
 ## Documentation
 
-To use this fork, add the following line to your `go.mod`:
-```
-replace github.com/libp2p/go-libp2p-kbucket => github.com/daotl/go-libp2p-kbucket {{KBUCKET_VERSION}}
-```
-
 API docs: [![Go Reference](https://pkg.go.dev/badge/github.com/daotl/go-libp2p-kbucket.svg)](https://pkg.go.dev/github.com/daotl/go-libp2p-kbucket)
 
 ## Contribute

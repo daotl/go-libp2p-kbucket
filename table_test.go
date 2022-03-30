@@ -8,7 +8,7 @@ import (
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/test"
 
-	"github.com/libp2p/go-libp2p-kbucket/peerdiversity"
+	"github.com/daotl/go-libp2p-kbucket/peerdiversity"
 	pstore "github.com/libp2p/go-libp2p-peerstore"
 
 	ma "github.com/multiformats/go-multiaddr"
