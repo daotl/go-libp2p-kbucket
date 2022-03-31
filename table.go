@@ -573,9 +573,9 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 	return 0
 }
 
+/* #DAOT */
+
 // AvgPeerRTTMicroSecs computes average RTT of peers in the RoutingTable to the local peer in microseconds.
-//
-// #DAOT
 func (rt *RoutingTable) AvgPeerRTTMicroSecs() int64 {
 	var avgPeerRTTMicroSecs int64 = 0
 	var cnt int64 = 0
@@ -591,4 +591,9 @@ func (rt *RoutingTable) AvgPeerRTTMicroSecs() int64 {
 		return avgPeerRTTMicroSecs / cnt
 	}
 	return 0
+}
+
+// SortClosestPeers just calls kbucket.SortClosestPeers() with the options of the RoutingTable.
+func (rt *RoutingTable) SortClosestPeers(peers []peer.ID, target ID) ([]peer.ID, error) {
+	return SortClosestPeers(peers, target, rt.considerLatency, rt.metrics, rt.dialer, rt.local, rt.avgBitsImprovedPerStep, rt.avgRoundTripsPerStepWithNewPeer, rt.AvgPeerRTTMicroSecs())
 }
