@@ -445,7 +445,7 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 
 	if rt.considerLatency {
 		s, err = newPeerDistanceAndLatencySorter(
-			make([]peerPriority, 0, (len(rt.buckets)-cpl)*rt.bucketsize), rt.metrics, rt.dialer, rt.local, id,
+			make([]peerPriority, 0, (len(rt.buckets)-cpl)*rt.bucketsize), id, rt.metrics, rt.dialer, rt.local,
 			rt.avgBitsImprovedPerStep, rt.avgRoundTripsPerStepWithNewPeer, rt.AvgPeerRTTMicroSecs(),
 		)
 		if err == nil {

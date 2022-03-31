@@ -83,7 +83,7 @@ func (pds *peerDistanceSorter) sort() {
 }
 
 // Sort the given peers by their ascending distance from the target. A new slice is returned.
-func SortClosestPeers(peers []peer.ID, target ID) []peer.ID {
+func SortClosestPeersByDistance(peers []peer.ID, target ID) []peer.ID {
 	sorter := peerDistanceSorter{
 		peers:  make([]peerDistance, 0, len(peers)),
 		target: target,
@@ -111,12 +111,13 @@ type peerPriority struct {
 // For algorithm details, see section 3.7.3 of the paper "Design and Implementation of Low-latency P2P Network for Graph-Based Distributed Ledger" by Wang Xiang.
 // "面向图式账本的低延迟P2P 网络的设计与实现" by 向往
 type peerDistanceAndLatencySorter struct {
-	peers []peerPriority
+	peers  []peerPriority
+	target ID
 	// Used to get RTTs of peers to the local peer
 	metrics peerstore.Metrics
 	// Optional: Used to get connectedness of peers to the local peer
 	dialer                 network.Dialer
-	local, target          ID
+	local                  ID
 	localCpl               int
 	avgBitsImprovedPerStep float64
 	// Average RTT count needed each step to connect to a new peer in the lookup process,
@@ -130,10 +131,10 @@ type peerDistanceAndLatencySorter struct {
 
 func newPeerDistanceAndLatencySorter(
 	peers []peerPriority,
+	target ID,
 	metrics peerstore.Metrics,
 	dialer network.Dialer,
 	local ID,
-	target ID,
 	avgBitsImprovedPerStep float64,
 	avgRoundTripsPerStepWithNewPeer float64,
 	avgPeerRTTMicroSecs int64,
@@ -157,10 +158,10 @@ func newPeerDistanceAndLatencySorter(
 	}
 	return &peerDistanceAndLatencySorter{
 		peers:                           peers,
+		target:                          target,
 		metrics:                         metrics,
 		dialer:                          dialer,
 		local:                           local,
-		target:                          target,
 		localCpl:                        CommonPrefixLen(local, target),
 		avgBitsImprovedPerStep:          avgBitsImprovedPerStep,
 		avgRoundTripsPerStepWithNewPeer: avgRoundTripsPerStepWithNewPeer,
@@ -232,19 +233,20 @@ func (pdls *peerDistanceAndLatencySorter) sort() {
 // A new slice is returned.
 func SortClosestPeersByDistanceAndLatency(
 	peers []peer.ID,
+	target ID,
 	metrics peerstore.Metrics,
 	dialer network.Dialer,
-	local, target ID,
+	local ID,
 	avgBitsImprovedPerStep float64,
 	avgRoundTripsPerStepWithNewPeer float64,
 	avgPeerRTTMicroSecs int64,
 ) ([]peer.ID, error) {
 	sorter, err := newPeerDistanceAndLatencySorter(
 		make([]peerPriority, 0, len(peers)),
+		target,
 		metrics,
 		dialer,
 		local,
-		target,
 		avgBitsImprovedPerStep,
 		avgRoundTripsPerStepWithNewPeer,
 		avgPeerRTTMicroSecs,
@@ -258,6 +260,27 @@ func SortClosestPeersByDistanceAndLatency(
 	}
 	sorter.sort()
 	return sorter.getPeers(0), nil
+}
+
+// Sort the given peers with SortClosestPeersByDistanceAndLatency if consideraLatency is true,
+// otherwise sort them with SortClosestPeersByDistance.
+func SortClosestPeers(
+	peers []peer.ID,
+	target ID,
+	considerLatency bool,
+	metrics peerstore.Metrics,
+	dialer network.Dialer,
+	local ID,
+	avgBitsImprovedPerStep float64,
+	avgRoundTripsPerStepWithNewPeer float64,
+	avgPeerRTTMicroSecs int64,
+) ([]peer.ID, error) {
+	if considerLatency {
+		return SortClosestPeersByDistanceAndLatency(peers, target, metrics, dialer, local,
+			avgBitsImprovedPerStep, avgRoundTripsPerStepWithNewPeer, avgPeerRTTMicroSecs)
+	} else {
+		return SortClosestPeersByDistance(peers, target), nil
+	}
 }
 
 // EstimatedAvgBitsImprovedPerStepFromBucketSize calculates the estimated average number of bits improved per lookup step.

@@ -556,7 +556,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
 
-	t.Logf("Testing SortClosestPeers and RoutingTable.NearestPeers with consierLatency disabled")
+	t.Logf("Testing SortClosestPeersByDistance and RoutingTable.NearestPeers with consierLatency disabled")
 
 	rt, err := NewRoutingTable(5, ConvertPeerID(local), time.Hour, m, nil, NoOpThreshold,
 		nil, false, 0, 0)
@@ -568,7 +568,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 		rt.TryAddPeer(peers[i], true, false)
 	}
 
-	closest := SortClosestPeers(rt.ListPeers(), ConvertPeerID(peers[2]))
+	closest := SortClosestPeersByDistance(rt.ListPeers(), ConvertPeerID(peers[2]))
 
 	t.Logf("Searching for peer: '%s'", peers[2])
 
@@ -611,9 +611,10 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 		rt.TryAddPeer(peers[i], true, false)
 	}
 
-	closest, err = SortClosestPeersByDistanceAndLatency(rt.ListPeers(), m, nil, ConvertPeerID(local),
-		ConvertPeerID(peers[2]), EstimatedAvgBitsImprovedPerStepFromBucketSize(rt.bucketsize),
-		AvgRoundTripsPerStepWithNewPeer_TCP_TLS, rt.AvgPeerRTTMicroSecs())
+	closest, err = SortClosestPeersByDistanceAndLatency(
+		rt.ListPeers(), ConvertPeerID(peers[2]), m, nil, ConvertPeerID(local),
+		EstimatedAvgBitsImprovedPerStepFromBucketSize(rt.bucketsize), AvgRoundTripsPerStepWithNewPeer_TCP_TLS, rt.AvgPeerRTTMicroSecs(),
+	)
 	require.NoError(t, err)
 
 	t.Logf("Searching for peer: '%s'", peers[2])
