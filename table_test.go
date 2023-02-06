@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/test"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/test"
 
 	"github.com/daotl/go-libp2p-kbucket/peerdiversity"
-	pstore "github.com/libp2p/go-libp2p-peerstore"
+	pstore "github.com/libp2p/go-libp2p/p2p/host/peerstore"
 
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/require"
@@ -311,6 +311,8 @@ func TestTryAddPeerLoad(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, nil)
+	require.NoError(t, err)
 
 	testWithRoutingTable := func(rt *RoutingTable) {
 		peers := make([]peer.ID, 100)

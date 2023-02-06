@@ -3,15 +3,15 @@ package kbucket
 import (
 	"bytes"
 	"errors"
+	"github.com/minio/sha256-simd"
 
 	ks "github.com/daotl/go-libp2p-kbucket/keyspace"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/peer"
 
 	u "github.com/ipfs/go-ipfs-util"
-	"github.com/minio/sha256-simd"
 )
 
-// Returned if a routing table query returns no results. This is NOT expected
+// ErrLookupFailure is returned if a routing table query returns no results. This is NOT expected
 // behaviour
 var ErrLookupFailure = errors.New("failed to find any peer in table")
 
