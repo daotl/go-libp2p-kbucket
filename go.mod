@@ -1,6 +1,7 @@
 module github.com/daotl/go-libp2p-kbucket
 
-go 1.16
+
+go 1.18
 
 require (
 	github.com/btcsuite/btcd v0.22.0-beta // indirect
