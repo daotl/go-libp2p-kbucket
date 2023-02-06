@@ -3,7 +3,6 @@
 
 name: Automerge
 on: [ pull_request ]
-name: Automerge
 
 jobs:
   automerge-check:
