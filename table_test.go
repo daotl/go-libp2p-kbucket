@@ -311,7 +311,8 @@ func TestTryAddPeerLoad(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, nil)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, nil, NoOpThreshold,
+		nil, false, 0, 0)
 	require.NoError(t, err)
 
 	testWithRoutingTable := func(rt *RoutingTable) {
@@ -336,7 +337,7 @@ func TestTryAddPeerLoad(t *testing.T) {
 	}
 
 	// considerLatency disabled
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, nil, NoOpThreshold,
+	rt, err = NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, nil, NoOpThreshold,
 		nil, false, 0, 0)
 	require.NoError(t, err)
 	testWithRoutingTable(rt)

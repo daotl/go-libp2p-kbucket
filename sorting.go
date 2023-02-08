@@ -2,6 +2,8 @@ package kbucket
 
 import (
 	"container/list"
+	"errors"
+	"math"
 	"sort"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -82,7 +84,7 @@ func (pds *peerDistanceSorter) sort() {
 }
 
 // Sort the given peers by their ascending distance from the target. A new slice is returned.
-func SortClosestPeers(peers []peer.ID, target ID) []peer.ID {
+func SortClosestPeersByDistance(peers []peer.ID, target ID) []peer.ID {
 	sorter := peerDistanceSorter{
 		peers:  make([]peerDistance, 0, len(peers)),
 		target: target,
