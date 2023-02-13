@@ -3,6 +3,7 @@ package kbucket
 import (
 	"bytes"
 	"errors"
+
 	"github.com/minio/sha256-simd"
 
 	ks "github.com/daotl/go-libp2p-kbucket/keyspace"
